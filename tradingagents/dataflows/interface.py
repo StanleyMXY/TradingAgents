@@ -23,6 +23,13 @@ from .alpha_vantage import (
     get_global_news as get_alpha_vantage_global_news,
 )
 from .alpha_vantage_common import AlphaVantageRateLimitError
+from .crypto_utils import (
+    is_crypto,
+    get_crypto_ohlcv,
+    get_crypto_indicators,
+    get_crypto_news,
+    get_crypto_fundamentals,
+)
 
 # Configuration and routing logic
 from .config import get_config
@@ -133,6 +140,26 @@ def get_vendor(category: str, method: str = None) -> str:
 
 def route_to_vendor(method: str, *args, **kwargs):
     """Route method calls to appropriate vendor implementation with fallback support."""
+
+    # Crypto pre-routing: if first arg is a crypto ticker, bypass vendor config
+    if args:
+        first_arg = args[0]
+        if isinstance(first_arg, str) and is_crypto(first_arg):
+            if method == "get_stock_data":
+                return get_crypto_ohlcv(*args, **kwargs)
+            elif method == "get_indicators":
+                return get_crypto_indicators(*args, **kwargs)
+            elif method == "get_news":
+                return get_crypto_news(*args, **kwargs)
+            elif method in ("get_fundamentals", "get_balance_sheet",
+                            "get_cashflow", "get_income_statement"):
+                return get_crypto_fundamentals(args[0], args[-1] if len(args) > 1 else None)
+            elif method == "get_insider_transactions":
+                return f"Insider transactions not applicable for crypto: {first_arg}"
+            elif method == "get_global_news":
+                pass  # Fall through to normal routing
+
+    # Original routing logic unchanged below
     category = get_category_for_method(method)
     vendor_config = get_vendor(category, method)
     primary_vendors = [v.strip() for v in vendor_config.split(',')]
@@ -140,7 +167,6 @@ def route_to_vendor(method: str, *args, **kwargs):
     if method not in VENDOR_METHODS:
         raise ValueError(f"Method '{method}' not supported")
 
-    # Build fallback chain: primary vendors first, then remaining available vendors
     all_available_vendors = list(VENDOR_METHODS[method].keys())
     fallback_vendors = primary_vendors.copy()
     for vendor in all_available_vendors:
@@ -157,6 +183,6 @@ def route_to_vendor(method: str, *args, **kwargs):
         try:
             return impl_func(*args, **kwargs)
         except AlphaVantageRateLimitError:
-            continue  # Only rate limits trigger fallback
+            continue
 
     raise RuntimeError(f"No available vendor for '{method}'")
